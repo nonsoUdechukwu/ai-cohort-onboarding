@@ -10,11 +10,15 @@ import time
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
-from flask import Blueprint, Response, abort, current_app, jsonify, redirect, render_template, request
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 
-from . import client_ip
 from .auth import authorize_admin
 from .graph import GraphError
+from .middleware import BodyTooLarge
+from .net import client_ip
+from .schemas import RegisterError, RegisterRequest, RegisterSuccess
 from .storage import (
     INVITE_SENT_OUTCOMES,
     OUTCOME_ALREADY_MEMBER,
@@ -27,8 +31,7 @@ from .storage import (
 
 log = logging.getLogger(__name__)
 
-main_bp = Blueprint("main", __name__)
-api_bp = Blueprint("api", __name__, url_prefix="/api")
+router = APIRouter()
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -39,10 +42,13 @@ MSG_BAD_CODE = "The cohort access code is not valid."
 MSG_BAD_CAPTCHA = "We could not verify that you are human. Please complete the check and try again."
 MSG_CAP = "Registrations are temporarily paused. Please try again later or contact your instructor."
 MSG_UNAVAILABLE = "Registration is not available right now. Please contact your instructor."
+MSG_RATE_LIMITED = "Too many attempts. Please wait a few minutes and try again."
+
+FORM_TYPES = ("application/x-www-form-urlencoded", "multipart/form-data")
 
 
-def _ctx() -> Dict[str, Any]:
-    return current_app.extensions["portal"]
+def _ctx(request: Request) -> Dict[str, Any]:
+    return request.app.state.portal
 
 
 def valid_email(email: str) -> bool:
@@ -56,56 +62,70 @@ def clean_name(name: str) -> str:
 # ---------------------------------------------------------------- public pages
 
 
-@main_bp.get("/")
-def index():
-    settings = _ctx()["settings"]
-    return render_template("index.html", site_key=settings.turnstile_site_key)
+@router.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    settings = _ctx(request)["settings"]
+    return request.app.state.templates.TemplateResponse(
+        request, "index.html", {"site_key": settings.turnstile_site_key}
+    )
 
 
-@main_bp.get("/healthz")
-def healthz():
-    return jsonify(status="ok")
+@router.get("/healthz")
+async def healthz() -> Dict[str, str]:
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------- registration
 
 
-def _payload() -> Dict[str, str]:
-    data = request.get_json(silent=True) if request.is_json else request.form
-    data = data or {}
+async def _payload(request: Request) -> RegisterRequest:
+    ctype = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    data: Any = {}
+    try:
+        if ctype == "application/json" or ctype.endswith("+json"):
+            data = await request.json()
+        elif ctype in FORM_TYPES:
+            data = await request.form()
+    except BodyTooLarge:
+        raise
+    except Exception:  # malformed JSON / multipart: treat as empty
+        data = {}
+    if not hasattr(data, "get"):
+        data = {}
+    return RegisterRequest.from_payload(data)
 
-    def get(key: str) -> str:
-        value = data.get(key, "")
-        return value.strip() if isinstance(value, str) else ""
 
-    return {
-        "email": get("email"),
-        "name": get("name"),
-        "access_code": get("access_code"),
-        "token": get("cf-turnstile-response") or get("turnstile_token"),
-    }
-
-
-def _log_attempt(email: str, name: str, outcome: str, error: str = "", request_id: str = "") -> None:
-    ctx = _ctx()
+async def _log_attempt(
+    request: Request, email: str, name: str, outcome: str, error: str = "", request_id: str = ""
+) -> None:
+    ctx = _ctx(request)
     record = build_record(ctx["settings"].group_id, email, name, outcome, error, request_id)
     try:
-        ctx["store"].add(record)
+        await run_in_threadpool(ctx["store"].add, record)
     except Exception:  # never fail the user flow because logging failed
         log.exception("Failed to write submission log for %s", email)
 
 
-def _fail(status: int, message: str) -> Tuple[Response, int]:
-    return jsonify(ok=False, error=message), status
+def _fail(status: int, message: str) -> JSONResponse:
+    return JSONResponse(RegisterError(error=message).model_dump(), status_code=status)
 
 
-@api_bp.post("/register")
-def register():
-    ctx = _ctx()
+@router.post(
+    "/api/register",
+    response_model=RegisterSuccess,
+    responses={code: {"model": RegisterError} for code in (400, 403, 413, 429, 500, 502, 503)},
+)
+async def register(request: Request):
+    ctx = _ctx(request)
     settings = ctx["settings"]
-    data = _payload()
-    email, name = data["email"].lower(), clean_name(data["name"])
-    ip = client_ip()
+    ip = client_ip(request)
+
+    if not ctx["limiter"].hit(ip):
+        log.info("Rate limit exceeded for %s", ip)
+        return _fail(429, MSG_RATE_LIMITED)
+
+    data = await _payload(request)
+    email, name = data.email.lower(), clean_name(data.name)
 
     if not valid_email(email):
         return _fail(400, MSG_BAD_EMAIL)
@@ -115,55 +135,52 @@ def register():
         log.error("Registration rejected, missing configuration: %s", ", ".join(missing))
         return _fail(503, MSG_UNAVAILABLE)
 
-    if not ctx["turnstile"].verify(data["token"], ip):
+    if not await ctx["turnstile"].verify(data.token, ip):
         log.info("Captcha failed for %s from %s", email, ip)
-        _log_attempt(email, name, OUTCOME_FAILED, "captcha_failed")
+        await _log_attempt(request, email, name, OUTCOME_FAILED, "captcha_failed")
         return _fail(400, MSG_BAD_CAPTCHA)
 
-    if not hmac.compare_digest(
-        data["access_code"].encode("utf-8"), settings.access_code.encode("utf-8")
-    ):
+    if not hmac.compare_digest(data.access_code.encode("utf-8"), settings.access_code.encode("utf-8")):
         log.info("Invalid access code for %s from %s", email, ip)
-        _log_attempt(email, name, OUTCOME_FAILED, "invalid_access_code")
+        await _log_attempt(request, email, name, OUTCOME_FAILED, "invalid_access_code")
         return _fail(403, MSG_BAD_CODE)
 
     if settings.daily_invite_cap:
         try:
-            sent_today = ctx["store"].count_since(start_of_utc_day(), INVITE_SENT_OUTCOMES)
+            sent_today = await run_in_threadpool(
+                ctx["store"].count_since, start_of_utc_day(), INVITE_SENT_OUTCOMES
+            )
         except Exception:
             log.exception("Could not read daily invite count; refusing to invite")
             return _fail(503, MSG_GENERIC)
         if sent_today >= settings.daily_invite_cap:
             log.warning("Daily invite cap %s reached", settings.daily_invite_cap)
-            _log_attempt(email, name, OUTCOME_FAILED, "daily_cap_reached")
+            await _log_attempt(request, email, name, OUTCOME_FAILED, "daily_cap_reached")
             return _fail(429, MSG_CAP)
 
     graph = ctx["graph"]
     request_id = ""
     try:
-        invitation = graph.invite(
-            email, name, settings.invite_redirect_url, settings.invite_message
-        )
+        invitation = await graph.invite(email, name, settings.invite_redirect_url, settings.invite_message)
         request_id = invitation.request_id
-        membership = graph.add_group_member(settings.group_id, invitation.user_id)
+        membership = await graph.add_group_member(settings.group_id, invitation.user_id)
         request_id = membership.request_id or request_id
     except GraphError as exc:
         log.error(
             "Graph failure for %s: %s (status=%s, request-id=%s)",
             email, exc.summary, exc.status, exc.request_id,
         )
-        _log_attempt(email, name, OUTCOME_FAILED, exc.summary, exc.request_id or request_id)
+        await _log_attempt(request, email, name, OUTCOME_FAILED, exc.summary, exc.request_id or request_id)
         return _fail(502, MSG_GENERIC)
     except Exception as exc:
         log.exception("Unexpected error registering %s", email)
-        _log_attempt(email, name, OUTCOME_FAILED, f"unexpected: {type(exc).__name__}", request_id)
+        await _log_attempt(request, email, name, OUTCOME_FAILED, f"unexpected: {type(exc).__name__}", request_id)
         return _fail(500, MSG_GENERIC)
 
     outcome = OUTCOME_ALREADY_MEMBER if membership.already_member else OUTCOME_INVITED
     log.info("Registered %s outcome=%s request-id=%s", email, outcome, request_id)
-    _log_attempt(email, name, outcome, "", request_id)
-    return jsonify(
-        ok=True,
+    await _log_attempt(request, email, name, outcome, "", request_id)
+    return RegisterSuccess(
         email=email,
         outcome=outcome,
         redeemUrl=invitation.redeem_url,
@@ -179,25 +196,28 @@ def register():
 _GROUP_NAME_TTL = 600.0
 
 
-def _require_admin() -> Optional[Any]:
-    decision = authorize_admin(request.headers, _ctx()["settings"])
+def _require_admin(request: Request) -> Optional[Response]:
+    """None if the caller is an admin, otherwise the response to return."""
+    settings = _ctx(request)["settings"]
+    decision = authorize_admin(request.headers, settings)
     if decision.allowed:
         return None
-    settings = _ctx()["settings"]
     if not decision.authenticated and settings.easy_auth_enabled:
-        return redirect(f"/.auth/login/aad?post_login_redirect_uri={request.path}")
-    abort(403)
+        return RedirectResponse(
+            f"/.auth/login/aad?post_login_redirect_uri={request.url.path}", status_code=302
+        )
+    return PlainTextResponse("Forbidden", status_code=403)
 
 
-def _group_name() -> str:
-    ctx = _ctx()
+async def _group_name(request: Request) -> str:
+    ctx = _ctx(request)
     group_id = ctx["settings"].group_id
     cache = ctx.setdefault("group_name_cache", {})
     hit = cache.get(group_id)
     if hit and time.monotonic() - hit[1] < _GROUP_NAME_TTL:
         return hit[0]
     try:
-        name = ctx["graph"].get_group_name(group_id) if group_id else ""
+        name = await ctx["graph"].get_group_name(group_id) if group_id else ""
     except Exception as exc:
         log.warning("Could not resolve group name: %s", exc)
         name = ""
@@ -205,14 +225,15 @@ def _group_name() -> str:
     return name
 
 
-def _query_rows():
-    settings = _ctx()["settings"]
-    outcome = request.args.get("outcome") or None
+async def _query_rows(request: Request) -> Tuple[list, Optional[str], bool]:
+    ctx = _ctx(request)
+    settings = ctx["settings"]
+    outcome: Optional[str] = request.query_params.get("outcome") or None
     if outcome not in OUTCOMES:
         outcome = None
-    all_cohorts = request.args.get("scope") == "all"
+    all_cohorts = request.query_params.get("scope") == "all"
     partition = None if all_cohorts else (settings.group_id or "unconfigured")
-    rows = _ctx()["store"].list(partition=partition, outcome=outcome, limit=2000)
+    rows = await run_in_threadpool(ctx["store"].list, partition=partition, outcome=outcome, limit=2000)
     return rows, outcome, all_cohorts
 
 
@@ -222,16 +243,16 @@ def _fmt_time(value: Any) -> str:
     return str(value or "")
 
 
-@main_bp.get("/admin")
-def admin():
-    denied = _require_admin()
+@router.get("/admin", response_class=HTMLResponse)
+async def admin(request: Request):
+    denied = _require_admin(request)
     if denied is not None:
         return denied
-    settings = _ctx()["settings"]
-    rows, outcome, all_cohorts = _query_rows()
+    settings = _ctx(request)["settings"]
+    rows, outcome, all_cohorts = await _query_rows(request)
     config_view = {
         "Cohort group ID": settings.group_id or "(not set)",
-        "Cohort group name": _group_name() or "(unavailable)",
+        "Cohort group name": await _group_name(request) or "(unavailable)",
         "Invite redirect URL": settings.invite_redirect_url,
         "Tenant ID": settings.tenant_id or "(not set)",
         "Graph auth": "Client secret" if settings.client_secret else "Managed identity",
@@ -239,14 +260,17 @@ def admin():
         "Rate limit per IP": settings.register_rate_limit,
         "Submission table": settings.table_name if settings.storage_connection_string else "(in-memory)",
     }
-    return render_template(
+    return request.app.state.templates.TemplateResponse(
+        request,
         "admin.html",
-        rows=rows,
-        outcome=outcome,
-        outcomes=OUTCOMES,
-        all_cohorts=all_cohorts,
-        config=config_view,
-        fmt_time=_fmt_time,
+        {
+            "rows": rows,
+            "outcome": outcome,
+            "outcomes": OUTCOMES,
+            "all_cohorts": all_cohorts,
+            "config": config_view,
+            "fmt_time": _fmt_time,
+        },
     )
 
 
@@ -257,12 +281,12 @@ def _csv_safe(value: Any) -> str:
     return text
 
 
-@main_bp.get("/admin/export.csv")
-def admin_export():
-    denied = _require_admin()
+@router.get("/admin/export.csv")
+async def admin_export(request: Request):
+    denied = _require_admin(request)
     if denied is not None:
         return denied
-    rows, _outcome, _all = _query_rows()
+    rows, _outcome, _all = await _query_rows(request)
     buf = io.StringIO()
     writer = csv.writer(buf)
     columns = ["CreatedAt", "Name", "Email", "Outcome", "ErrorSummary", "GroupId", "GraphRequestId"]
@@ -271,6 +295,6 @@ def admin_export():
         writer.writerow([_csv_safe(row.get(c)) for c in columns])
     return Response(
         buf.getvalue(),
-        mimetype="text/csv",
+        media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=submissions.csv"},
     )
