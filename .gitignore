@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+*.parameters.local.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Deploy artifacts
+release.zip
