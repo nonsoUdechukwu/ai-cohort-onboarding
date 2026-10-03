@@ -37,7 +37,7 @@ jobs:
 
       - name: Package app
         # Oryx installs requirements.txt on the server (SCM_DO_BUILD_DURING_DEPLOYMENT=true).
-        run: zip -r release.zip portal wsgi.py gunicorn.conf.py requirements.txt
+        run: zip -r release.zip portal asgi.py gunicorn.conf.py requirements.txt
 
       - uses: azure/login@v2
         with:
