@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Admin - AI Cohort Onboarding{% endblock %}
+{% block content %}
+<h1>Submissions</h1>
+
+<section aria-labelledby="config-heading" class="card">
+  <h2 id="config-heading">Current cohort configuration</h2>
+  <dl class="config">
+    {% for key, value in config.items() %}
+      <dt>{{ key }}</dt><dd>{{ value }}</dd>
+    {% endfor %}
+  </dl>
+</section>
+
+<form method="get" action="/admin" class="filters">
+  <div class="field inline">
+    <label for="outcome">Outcome</label>
+    <select id="outcome" name="outcome">
+      <option value="" {% if not outcome %}selected{% endif %}>All</option>
+      {% for o in outcomes %}
+        <option value="{{ o }}" {% if outcome == o %}selected{% endif %}>{{ o.replace('_', ' ') }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field inline">
+    <label><input type="checkbox" name="scope" value="all" {% if all_cohorts %}checked{% endif %}> All cohorts</label>
+  </div>
+  <button type="submit">Filter</button>
+  <a class="button secondary"
+     href="/admin/export.csv?{% if outcome %}outcome={{ outcome }}&amp;{% endif %}{% if all_cohorts %}scope=all{% endif %}">Export CSV</a>
+</form>
+
+<p>{{ rows|length }} submission{{ '' if rows|length == 1 else 's' }}</p>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th scope="col">Time</th><th scope="col">Name</th><th scope="col">Email</th>
+        <th scope="col">Outcome</th><th scope="col">Error</th><th scope="col">Group ID</th>
+        <th scope="col">Graph request-id</th></tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ fmt_time(r.get('CreatedAt')) }}</td>
+      <td>{{ r.get('Name', '') }}</td>
+      <td>{{ r.get('Email', '') }}</td>
+      <td><span class="badge badge-{{ r.get('Outcome', '') }}">{{ r.get('Outcome', '').replace('_', ' ') }}</span></td>
+      <td>{{ r.get('ErrorSummary', '') }}</td>
+      <td class="mono">{{ r.get('GroupId', '') }}</td>
+      <td class="mono">{{ r.get('GraphRequestId', '') }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7">No submissions yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p><a href="/.auth/logout">Sign out</a></p>
+{% endblock %}

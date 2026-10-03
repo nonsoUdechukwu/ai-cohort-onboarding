@@ -1,0 +1,126 @@
+:root {
+  --fg: #1b1b1f;
+  --muted: #5a5a66;
+  --bg: #f6f7fb;
+  --card: #ffffff;
+  --accent: #0b5cad;
+  --accent-dark: #084785;
+  --ok-bg: #e7f6ec;
+  --ok-fg: #13542b;
+  --err-bg: #fdecec;
+  --err-fg: #8a1c1c;
+  --border: #d4d6de;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.wrap { max-width: 72rem; margin: 0 auto; padding: 1rem; }
+.wrap.narrow { max-width: 34rem; }
+
+.skip-link { position: absolute; left: -999px; }
+.skip-link:focus { left: 1rem; top: 1rem; background: #fff; padding: .5rem; z-index: 10; }
+
+.site-header { background: var(--accent); color: #fff; }
+.brand { font-weight: 600; }
+
+h1 { font-size: 1.6rem; margin: 1rem 0 .5rem; }
+h2 { font-size: 1.15rem; }
+
+form#register-form, .card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  padding: 1.25rem;
+  margin: 1rem 0;
+}
+
+.field { margin-bottom: 1rem; }
+.field.inline { display: inline-block; margin-right: 1rem; }
+label { display: block; font-weight: 600; margin-bottom: .25rem; }
+.optional { font-weight: 400; color: var(--muted); }
+
+input[type="email"], input[type="text"], select {
+  width: 100%;
+  padding: .65rem .75rem;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: .375rem;
+  background: #fff;
+}
+select { width: auto; }
+input[aria-invalid="true"] { border-color: var(--err-fg); }
+
+input:focus, select:focus, button:focus, a:focus, .status:focus {
+  outline: 3px solid #7fb2ff;
+  outline-offset: 2px;
+}
+
+.field-error { color: var(--err-fg); margin: .25rem 0 0; font-size: .9rem; }
+
+button, .button {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .7rem 1.2rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: .375rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+button:hover, .button:hover { background: var(--accent-dark); }
+button:disabled { opacity: .7; cursor: progress; }
+.button.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+
+#register-form button { width: 100%; justify-content: center; }
+
+.spinner {
+  width: 1rem; height: 1rem;
+  border: 2px solid rgba(255,255,255,.5);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+
+.hint { color: var(--muted); font-size: .875rem; margin: .5rem 0 0; }
+
+.status { padding: 1rem; border-radius: .5rem; margin: 1rem 0; }
+.status p { margin: .25rem 0; }
+.status-success { background: var(--ok-bg); color: var(--ok-fg); }
+.status-error { background: var(--err-bg); color: var(--err-fg); }
+.status a { color: inherit; font-weight: 600; }
+
+.privacy { color: var(--muted); font-size: .9rem; }
+
+.config { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: 0; }
+.config dt { font-weight: 600; }
+.config dd { margin: 0; word-break: break-all; }
+
+.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .5rem; margin: 1rem 0; }
+.filters .field { margin-bottom: 0; }
+
+.table-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--border); border-radius: .5rem; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: #eef0f6; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+
+.badge { padding: .1rem .5rem; border-radius: 1rem; font-size: .8rem; white-space: nowrap; }
+.badge-invited { background: var(--ok-bg); color: var(--ok-fg); }
+.badge-already_member { background: #e8f0fb; color: #0b3f7a; }
+.badge-failed { background: var(--err-bg); color: var(--err-fg); }

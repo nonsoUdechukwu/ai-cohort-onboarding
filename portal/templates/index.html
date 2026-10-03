@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Join the AI training cohort{% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block head %}
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+{% endblock %}
+{% block content %}
+<h1>Join the AI training cohort</h1>
+<p>Enter your email and the access code from your instructor. You will receive a Microsoft
+  invitation to the training tenant, which gives you access to the Azure portal.</p>
+
+<form id="register-form" action="/api/register" method="post" novalidate>
+  <div class="field">
+    <label for="email">Email <span aria-hidden="true">*</span></label>
+    <input id="email" name="email" type="email" autocomplete="email" inputmode="email"
+           required maxlength="254" aria-describedby="email-error">
+    <p id="email-error" class="field-error" hidden>Please enter a valid email address.</p>
+  </div>
+
+  <div class="field">
+    <label for="name">Full name <span class="optional">(optional)</span></label>
+    <input id="name" name="name" type="text" autocomplete="name" maxlength="100">
+  </div>
+
+  <div class="field">
+    <label for="access_code">Cohort access code <span aria-hidden="true">*</span></label>
+    <input id="access_code" name="access_code" type="text" autocomplete="off"
+           autocapitalize="off" spellcheck="false" required maxlength="200"
+           aria-describedby="code-error">
+    <p id="code-error" class="field-error" hidden>Please enter the access code.</p>
+  </div>
+
+  <div class="field">
+    <div class="cf-turnstile" data-sitekey="{{ site_key }}" data-theme="light"></div>
+  </div>
+
+  <button id="submit" type="submit">
+    <span class="spinner" aria-hidden="true" hidden></span>
+    <span class="label">Send my invitation</span>
+  </button>
+  <p class="hint">The first request can take up to 30 seconds while the server wakes up.</p>
+</form>
+
+<div id="status" class="status" role="status" aria-live="polite" tabindex="-1" hidden></div>
+
+<section class="privacy">
+  <h2>Privacy</h2>
+  <p>We store only your email address, name (if given) and the time of your request. They are used
+    to invite you to the training tenant and to let the instructor see who joined.</p>
+</section>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}
