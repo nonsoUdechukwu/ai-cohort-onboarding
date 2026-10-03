@@ -31,7 +31,7 @@ def test_admin_allowed_by_upn(client, store):
     _seed(store)
     resp = client.get("/admin", headers={"X-MS-CLIENT-PRINCIPAL": principal_header("Admin@Contoso.com")})
     assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
+    body = resp.text
     assert "ok@example.com" in body
     assert "bad@example.com" in body
     assert "old@example.com" not in body  # other cohort hidden by default
@@ -52,16 +52,16 @@ def test_admin_allowed_by_group(make_client):
 def test_admin_filter_and_scope(client, store):
     _seed(store)
     hdr = {"X-MS-CLIENT-PRINCIPAL": principal_header("admin@contoso.com")}
-    body = client.get("/admin?outcome=failed", headers=hdr).get_data(as_text=True)
+    body = client.get("/admin?outcome=failed", headers=hdr).text
     assert "bad@example.com" in body and "ok@example.com" not in body
-    body = client.get("/admin?scope=all", headers=hdr).get_data(as_text=True)
+    body = client.get("/admin?scope=all", headers=hdr).text
     assert "old@example.com" in body
 
 
 def test_admin_rows_newest_first(client, store):
     _seed(store)
     hdr = {"X-MS-CLIENT-PRINCIPAL": principal_header("admin@contoso.com")}
-    body = client.get("/admin", headers=hdr).get_data(as_text=True)
+    body = client.get("/admin", headers=hdr).text
     assert body.index("bad@example.com") < body.index("ok@example.com")
 
 
@@ -70,8 +70,8 @@ def test_csv_export(client, store):
     hdr = {"X-MS-CLIENT-PRINCIPAL": principal_header("admin@contoso.com")}
     resp = client.get("/admin/export.csv?outcome=invited", headers=hdr)
     assert resp.status_code == 200
-    assert resp.mimetype == "text/csv"
-    lines = resp.get_data(as_text=True).strip().splitlines()
+    assert resp.headers["content-type"].startswith("text/csv")
+    lines = resp.text.strip().splitlines()
     assert lines[0].startswith("timestamp,name,email,outcome")
     assert len(lines) == 2 and "ok@example.com" in lines[1]
 
@@ -79,7 +79,7 @@ def test_csv_export(client, store):
 def test_csv_export_neutralises_formulas(client, store):
     _seed(store)
     hdr = {"X-MS-CLIENT-PRINCIPAL": principal_header("admin@contoso.com")}
-    text = client.get("/admin/export.csv", headers=hdr).get_data(as_text=True)
+    text = client.get("/admin/export.csv", headers=hdr).text
     assert "'=HYPERLINK" in text
 
 
@@ -89,7 +89,7 @@ def test_local_dev_bypass(make_client):
 
 def test_local_dev_bypass_ignored_in_app_service(make_client):
     client = make_client(local_dev_admin=True, running_in_app_service=True, easy_auth_enabled=True)
-    resp = client.get("/admin")
+    resp = client.get("/admin", follow_redirects=False)
     assert resp.status_code == 302
     assert "/.auth/login/aad" in resp.headers["Location"]
 

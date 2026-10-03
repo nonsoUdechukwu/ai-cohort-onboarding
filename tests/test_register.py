@@ -9,7 +9,7 @@ from .conftest import ACCESS_CODE, GROUP_ID, TENANT_ID, valid_form
 def test_index_renders_form(client):
     resp = client.get("/")
     assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
+    body = resp.text
     assert 'name="email"' in body
     assert 'name="access_code"' in body
     assert 'data-sitekey="site"' in body
@@ -19,7 +19,7 @@ def test_index_renders_form(client):
 def test_success_invites_and_adds_to_group(client, graph, store):
     resp = client.post("/api/register", data=valid_form())
     assert resp.status_code == 200
-    data = resp.get_json()
+    data = resp.json()
     assert data["ok"] is True
     assert data["outcome"] == "invited"
     assert data["redeemUrl"].startswith("https://")
@@ -47,14 +47,14 @@ def test_success_invites_and_adds_to_group(client, graph, store):
 def test_json_body_supported(client):
     resp = client.post("/api/register", json=valid_form())
     assert resp.status_code == 200
-    assert resp.get_json()["ok"] is True
+    assert resp.json()["ok"] is True
 
 
 def test_already_member_is_success(client, graph, store):
     graph.already_member = True
     resp = client.post("/api/register", data=valid_form())
     assert resp.status_code == 200
-    assert resp.get_json()["outcome"] == "already_member"
+    assert resp.json()["outcome"] == "already_member"
     assert store.list()[0]["Outcome"] == "already_member"
 
 
@@ -63,14 +63,14 @@ def test_resubmission_is_idempotent(client, graph, store):
     graph.already_member = True
     resp = client.post("/api/register", data=valid_form())
     assert resp.status_code == 200
-    assert resp.get_json()["ok"] is True
+    assert resp.json()["ok"] is True
     assert [r["Outcome"] for r in store.list()] == ["already_member", "invited"]
 
 
 def test_bad_access_code_rejected(client, graph, store):
     resp = client.post("/api/register", data=valid_form(access_code="wrong"))
     assert resp.status_code == 403
-    assert resp.get_json()["ok"] is False
+    assert resp.json()["ok"] is False
     assert graph.invites == []
     row = store.list()[0]
     assert row["Outcome"] == "failed"
@@ -83,7 +83,7 @@ def test_bad_captcha_rejected(client, graph, turnstile, store):
     turnstile.result = False
     resp = client.post("/api/register", data=valid_form())
     assert resp.status_code == 400
-    assert "verify" in resp.get_json()["error"]
+    assert "verify" in resp.json()["error"]
     assert graph.invites == []
     assert store.list()[0]["ErrorSummary"] == "captcha_failed"
 
@@ -106,14 +106,14 @@ def test_rate_limit_per_ip(client):
         assert client.post("/api/register", data=valid_form(access_code="x")).status_code == 403
     resp = client.post("/api/register", data=valid_form())
     assert resp.status_code == 429
-    assert resp.get_json()["ok"] is False
+    assert resp.json()["ok"] is False
 
 
 def test_rate_limit_is_per_ip(client):
     for _ in range(5):
-        client.post("/api/register", data=valid_form(), environ_base={"REMOTE_ADDR": "10.0.0.1"})
-    blocked = client.post("/api/register", data=valid_form(), environ_base={"REMOTE_ADDR": "10.0.0.1"})
-    other = client.post("/api/register", data=valid_form(), environ_base={"REMOTE_ADDR": "10.0.0.2"})
+        client.post("/api/register", data=valid_form(), headers={"X-Forwarded-For": "10.0.0.1"})
+    blocked = client.post("/api/register", data=valid_form(), headers={"X-Forwarded-For": "10.0.0.1"})
+    other = client.post("/api/register", data=valid_form(), headers={"X-Forwarded-For": "10.0.0.2"})
     assert blocked.status_code == 429
     assert other.status_code == 200
 
@@ -145,7 +145,7 @@ def test_graph_invite_failure_is_generic(client, graph, store):
     graph.invite_error = GraphError("HTTP 403 Authorization_RequestDenied: secret detail", 403, "rid-1")
     resp = client.post("/api/register", data=valid_form())
     assert resp.status_code == 502
-    assert "secret detail" not in resp.get_data(as_text=True)
+    assert "secret detail" not in resp.text
     row = store.list()[0]
     assert row["Outcome"] == "failed"
     assert "Authorization_RequestDenied" in row["ErrorSummary"]
@@ -174,3 +174,102 @@ def test_storage_failure_does_not_break_registration(make_client, store, monkeyp
 
     monkeypatch.setattr(store, "add", boom)
     assert client.post("/api/register", data=valid_form()).status_code == 200
+
+
+def test_healthz(client):
+    resp = client.get("/healthz")
+    assert resp.status_code == 200 and resp.json() == {"status": "ok"}
+
+
+def test_static_assets_and_security_headers(client):
+    resp = client.get("/static/app.js")
+    assert resp.status_code == 200
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    assert "Cache-Control" not in resp.headers or "no-store" not in resp.headers["Cache-Control"]
+    api = client.post("/api/register", data=valid_form(email="bad"))
+    assert api.headers["Cache-Control"] == "no-store"
+    assert client.get("/admin").headers["Cache-Control"] == "no-store"
+
+
+def test_api_docs_disabled(client):
+    assert client.get("/docs").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
+
+
+def test_multipart_form_supported(client):
+    # The browser sends FormData (multipart/form-data) from static/app.js.
+    resp = client.post("/api/register", files={k: (None, v) for k, v in valid_form().items()})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+def test_turnstile_token_alias_in_json(client, turnstile):
+    form = valid_form(**{"cf-turnstile-response": ""})
+    form["turnstile_token"] = "alt-token"
+    assert client.post("/api/register", json=form).status_code == 200
+    assert turnstile.calls[-1][0] == "alt-token"
+
+
+def test_malformed_json_is_rejected_cleanly(client, graph):
+    resp = client.post("/api/register", content=b"{not json", headers={"Content-Type": "application/json"})
+    assert resp.status_code == 400
+    assert resp.json() == {"ok": False, "error": "Please enter a valid email address."}
+    assert graph.invites == []
+
+
+def test_oversized_body_rejected(client, graph):
+    resp = client.post("/api/register", data=valid_form(name="x" * 20000))
+    assert resp.status_code == 413
+    assert graph.invites == []
+
+
+def test_last_forwarded_hop_and_ipv6_port(client, turnstile):
+    client.post("/api/register", data=valid_form(), headers={"X-Forwarded-For": "6.6.6.6, 198.51.100.4:443"})
+    assert turnstile.calls[-1][1] == "198.51.100.4"
+    client.post("/api/register", data=valid_form(), headers={"X-Forwarded-For": "[2001:db8::1]:5000"})
+    assert turnstile.calls[-1][1] == "2001:db8::1"
+
+
+def test_rate_limit_falls_back_to_socket_peer(graph, turnstile, store):
+    from fastapi.testclient import TestClient
+
+    from portal import create_app
+
+    from .conftest import make_settings
+
+    app = create_app(make_settings(), graph=graph, store=store, turnstile=turnstile)
+    a = TestClient(app, client=("10.1.1.1", 1234))
+    b = TestClient(app, client=("10.1.1.2", 1234))
+    for _ in range(5):
+        a.post("/api/register", data=valid_form(access_code="x"))
+    assert a.post("/api/register", data=valid_form()).status_code == 429
+    assert b.post("/api/register", data=valid_form()).status_code == 200
+    assert turnstile.calls[-1][1] == "10.1.1.2"
+
+
+def test_access_code_never_logged(client, caplog):
+    caplog.set_level("DEBUG")
+    client.post("/api/register", data=valid_form(access_code="wrong-code-123"))
+    client.post("/api/register", data=valid_form())
+    assert "wrong-code-123" not in caplog.text
+    assert ACCESS_CODE not in caplog.text
+
+
+def test_cap_read_failure_refuses(make_client, graph, store, monkeypatch):
+    client = make_client()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("table down")
+
+    monkeypatch.setattr(store, "count_since", boom)
+    assert client.post("/api/register", data=valid_form()).status_code == 503
+    assert graph.invites == []
+
+
+def test_unexpected_graph_error_is_500(client, graph, store):
+    graph.invite_error = RuntimeError("kaboom")
+    resp = client.post("/api/register", data=valid_form())
+    assert resp.status_code == 500
+    assert "kaboom" not in resp.text
+    assert store.list()[0]["ErrorSummary"] == "unexpected: RuntimeError"
