@@ -51,7 +51,9 @@ def create_app(
     if turnstile is None:
         from .turnstile import TurnstileVerifier
 
-        turnstile = TurnstileVerifier(settings.turnstile_secret_key)
+        turnstile = TurnstileVerifier(
+            settings.turnstile_secret_key, expected_hostnames=settings.turnstile_hostnames
+        )
         owned.append(turnstile)
     if graph is None:
         from .graph import GraphClient, build_credential

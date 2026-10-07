@@ -13,6 +13,7 @@ def test_index_renders_form(client):
     assert 'name="email"' in body
     assert 'name="access_code"' in body
     assert 'data-sitekey="site"' in body
+    assert 'data-action="register"' in body
     assert "Content-Security-Policy" in resp.headers
 
 

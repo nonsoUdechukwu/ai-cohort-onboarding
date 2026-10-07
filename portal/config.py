@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     invite_message: str = ""
     turnstile_site_key: str = ""
     turnstile_secret_key: str = Field(default="", repr=False)
+    turnstile_hostnames: Annotated[List[str], NoDecode] = Field(default_factory=list)
     storage_connection_string: str = Field(default="", repr=False)
     table_name: str = DEFAULT_TABLE_NAME
     admin_upns: Annotated[List[str], NoDecode] = Field(default_factory=list)
@@ -78,7 +79,7 @@ class Settings(BaseSettings):
             return DEFAULT_TABLE_NAME if info.field_name == "table_name" else DEFAULT_RATE_LIMIT
         return value
 
-    @field_validator("admin_upns", mode="before")
+    @field_validator("admin_upns", "turnstile_hostnames", mode="before")
     @classmethod
     def _csv(cls, value: Any) -> List[str]:
         items = value.split(",") if isinstance(value, str) else list(value or [])

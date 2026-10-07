@@ -50,6 +50,7 @@ All configuration comes from environment variables (App Service **Application se
 | `INVITE_REDIRECT_URL` | no | Default `https://portal.azure.com/<TENANT_ID>` |
 | `INVITE_MESSAGE` | no | Custom text in the invitation email |
 | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | yes | From Cloudflare Turnstile |
+| `TURNSTILE_HOSTNAMES` | yes (real keys) | Comma-separated hostnames the token must come from, e.g. `aicohort.azurewebsites.net`. The widget action must be `register`. |
 | `STORAGE_CONNECTION_STRING` | yes in Azure | Empty = in-memory log (local dev only) |
 | `TABLE_NAME` | no | Default `submissions` |
 | `ADMIN_UPNS` | one of | Comma-separated UPNs allowed on `/admin` |

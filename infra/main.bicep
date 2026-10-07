@@ -48,6 +48,9 @@ param turnstileSiteKey string = ''
 @secure()
 param turnstileSecretKey string = ''
 
+@description('Comma-separated hostnames Turnstile tokens must come from (never include localhost in production).')
+param turnstileHostnames string = '${appName}.azurewebsites.net'
+
 @description('Comma-separated admin UPNs for /admin.')
 param adminUpns string = ''
 
@@ -114,6 +117,7 @@ var baseSettings = [
   { name: 'INVITE_MESSAGE', value: inviteMessage }
   { name: 'TURNSTILE_SITE_KEY', value: turnstileSiteKey }
   { name: 'TURNSTILE_SECRET_KEY', value: turnstileSecretKey }
+  { name: 'TURNSTILE_HOSTNAMES', value: turnstileHostnames }
   { name: 'STORAGE_CONNECTION_STRING', value: storageConnectionString }
   { name: 'TABLE_NAME', value: tableName }
   { name: 'ADMIN_UPNS', value: adminUpns }

@@ -142,25 +142,50 @@ async def test_build_credential_selects_type():
 
 @respx.mock
 async def test_turnstile_verify():
+    ok = {"success": True, "action": "register", "hostname": "aicohort.azurewebsites.net"}
     route = respx.post(SITEVERIFY_URL).mock(
         side_effect=[
-            httpx.Response(200, json={"success": True}),
+            httpx.Response(200, json=ok),
             httpx.Response(200, json={"success": False, "error-codes": ["invalid-input-response"]}),
             httpx.ConnectError("down"),
             httpx.Response(200, text="not json"),
+            httpx.Response(500, json=ok),
+            httpx.Response(200, json={**ok, "action": "login"}),
+            httpx.Response(200, json={**ok, "hostname": "evil.example"}),
         ]
     )
-    verifier = TurnstileVerifier("secret", httpx.AsyncClient())
+    verifier = TurnstileVerifier(
+        "secret", httpx.AsyncClient(), expected_hostnames=["AICOHORT.azurewebsites.net"]
+    )
     assert await verifier.verify("tok", "1.2.3.4") is True
     assert parse_qs(route.calls[0].request.content.decode()) == {
         "secret": ["secret"], "response": ["tok"], "remoteip": ["1.2.3.4"]
     }
-    assert await verifier.verify("tok") is False
-    assert await verifier.verify("tok") is False
-    assert await verifier.verify("tok") is False
+    for _ in range(6):
+        assert await verifier.verify("tok") is False
     assert await verifier.verify("") is False
+    assert await verifier.verify("x" * 2049) is False
     assert await TurnstileVerifier("", httpx.AsyncClient()).verify("tok") is False
-    assert route.call_count == 4  # no call for empty token / missing secret
+    assert route.call_count == 7  # no call for empty/oversized token or missing secret
+
+
+@respx.mock
+async def test_turnstile_requires_hostnames_for_real_keys():
+    respx.post(SITEVERIFY_URL).mock(
+        return_value=httpx.Response(200, json={"success": True, "action": "register", "hostname": "a.b"})
+    )
+    assert await TurnstileVerifier("secret", httpx.AsyncClient()).verify("tok") is False
+
+
+@respx.mock
+async def test_turnstile_testing_key_skips_action_and_hostname():
+    respx.post(SITEVERIFY_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"success": True, "hostname": "example.com", "metadata": {"result_with_testing_key": True}},
+        )
+    )
+    assert await TurnstileVerifier("secret", httpx.AsyncClient()).verify("tok") is True
 
 
 def test_settings_from_env_defaults():
@@ -209,3 +234,10 @@ def test_settings_reads_process_environment(monkeypatch):
     assert s.admin_upns == ["boss@contoso.com"]
     assert s.running_in_app_service is True
     assert s.invite_redirect_url == "https://portal.azure.com/env-tenant"
+
+
+def test_turnstile_hostnames_from_env():
+    from portal.config import Settings
+
+    s = Settings.from_env({"TURNSTILE_HOSTNAMES": " AiCohort.azurewebsites.net , ,localhost"})
+    assert s.turnstile_hostnames == ["aicohort.azurewebsites.net", "localhost"]
