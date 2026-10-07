@@ -22,12 +22,21 @@ if [[ -z "$APP_ID" ]]; then
   az ad sp create --id "$APP_ID" --output none
 fi
 
-az ad app federated-credential create --id "$APP_ID" --parameters "{
-  \"name\": \"github-${BRANCH//\//-}\",
-  \"issuer\": \"https://token.actions.githubusercontent.com\",
-  \"subject\": \"repo:${REPO}:ref:refs/heads/${BRANCH}\",
-  \"audiences\": [\"api://AzureADTokenExchange\"]
-}" --output none 2>/dev/null || echo "(federated credential already exists)"
+add_fic() {
+  az ad app federated-credential create --id "$APP_ID" --parameters "{
+    \"name\": \"$1\",
+    \"issuer\": \"https://token.actions.githubusercontent.com\",
+    \"subject\": \"$2\",
+    \"audiences\": [\"api://AzureADTokenExchange\"]
+  }" --output none 2>/dev/null || echo "(federated credential $1 already exists)"
+}
+add_fic "github-${BRANCH//\//-}" "repo:${REPO}:ref:refs/heads/${BRANCH}"
+
+# GitHub may issue subjects with immutable owner/repo IDs (repo:owner@<id>/repo@<id>:...).
+if command -v gh >/dev/null 2>&1 && IDS=$(gh api "repos/${REPO}" --jq '"\(.owner.id) \(.id)"' 2>/dev/null); then
+  read -r OWNER_ID REPO_ID <<<"$IDS"
+  add_fic "github-${BRANCH//\//-}-immutable" "repo:${REPO%%/*}@${OWNER_ID}/${REPO#*/}@${REPO_ID}:ref:refs/heads/${BRANCH}"
+fi
 
 # Website Contributor on the resource group is enough for zip deploy.
 az role assignment create --assignee "$APP_ID" --role "Website Contributor" \
