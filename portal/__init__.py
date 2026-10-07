@@ -1,15 +1,23 @@
-"""AI Cohort Onboarding Portal - Flask application factory."""
+"""AI Cohort Onboarding Portal - FastAPI application factory."""
 from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Optional
 
-from flask import Flask, jsonify, request
-from flask_limiter import Limiter
-from werkzeug.middleware.proxy_fix import ProxyFix
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from .config import Settings
+from .middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
+from .net import client_ip  # noqa: F401  (re-exported)
+from .ratelimit import RateLimiter
+
+BASE_DIR = Path(__file__).resolve().parent
+MAX_CONTENT_LENGTH = 16 * 1024
 
 CSP = (
     "default-src 'self'; "
@@ -22,32 +30,19 @@ CSP = (
 )
 
 
-def client_ip() -> str:
-    """Client IP after ProxyFix. App Service may append ':port' to X-Forwarded-For entries."""
-    addr = (request.remote_addr or "").strip()
-    if addr.startswith("[") and "]" in addr:  # [ipv6]:port
-        return addr[1 : addr.index("]")]
-    if addr.count(":") == 1:  # ipv4:port
-        return addr.split(":", 1)[0]
-    return addr or "unknown"
-
-
 def create_app(
     settings: Optional[Settings] = None,
     *,
     graph: Any = None,
     store: Any = None,
     turnstile: Any = None,
-) -> Flask:
+) -> FastAPI:
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     settings = settings or Settings.from_env()
-
-    app = Flask(__name__)
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # type: ignore[method-assign]
-    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
+    owned = []  # clients created here, closed on shutdown
 
     if store is None:
         from .storage import create_store
@@ -57,6 +52,7 @@ def create_app(
         from .turnstile import TurnstileVerifier
 
         turnstile = TurnstileVerifier(settings.turnstile_secret_key)
+        owned.append(turnstile)
     if graph is None:
         from .graph import GraphClient, build_credential
 
@@ -68,40 +64,42 @@ def create_app(
                 settings.managed_identity_client_id,
             )
         )
+        owned.append(graph)
 
-    # In-memory storage is fine: F1 runs a single instance and gunicorn uses one worker process.
-    limiter = Limiter(key_func=client_ip, app=app, storage_uri="memory://", default_limits=[])
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        for client in owned:
+            try:
+                await client.aclose()
+            except Exception:  # pragma: no cover - best effort on shutdown
+                logging.getLogger(__name__).warning("Error closing %s", type(client).__name__)
 
-    app.extensions["portal"] = {
+    # API docs are disabled: the app has no public API surface beyond the form.
+    app = FastAPI(
+        title="AI Cohort Onboarding Portal",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
+    app.state.portal = {
         "settings": settings,
         "graph": graph,
         "store": store,
         "turnstile": turnstile,
-        "limiter": limiter,
+        # In-memory is fine: F1 runs a single instance and gunicorn uses one worker process.
+        "limiter": RateLimiter(settings.register_rate_limit),
     }
+    app.state.templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-    from .routes import api_bp, main_bp
+    from .routes import router
 
-    limiter.limit(settings.register_rate_limit, methods=["POST"])(api_bp)
-    app.register_blueprint(main_bp)
-    app.register_blueprint(api_bp)
+    app.include_router(router)
+    app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-    @app.errorhandler(429)
-    def too_many_requests(_e):
-        return (
-            jsonify(ok=False, error="Too many attempts. Please wait a few minutes and try again."),
-            429,
-        )
-
-    @app.after_request
-    def security_headers(resp):
-        resp.headers.setdefault("Content-Security-Policy", CSP)
-        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-        resp.headers.setdefault("Referrer-Policy", "no-referrer")
-        resp.headers.setdefault("X-Frame-Options", "DENY")
-        if request.path.startswith(("/admin", "/api/")):
-            resp.headers["Cache-Control"] = "no-store"
-        return resp
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_CONTENT_LENGTH)
+    app.add_middleware(SecurityHeadersMiddleware, csp=CSP)
 
     missing = settings.missing_required()
     if missing:

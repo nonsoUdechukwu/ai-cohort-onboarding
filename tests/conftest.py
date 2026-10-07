@@ -5,6 +5,7 @@ import json
 from typing import List, Optional
 
 import pytest
+from fastapi.testclient import TestClient
 
 from portal import create_app
 from portal.config import Settings
@@ -24,7 +25,7 @@ class FakeGraph:
         self.invite_error: Optional[GraphError] = None
         self.member_error: Optional[GraphError] = None
 
-    def invite(self, email, display_name, redirect_url, message=""):
+    async def invite(self, email, display_name, redirect_url, message=""):
         self.invites.append(
             {"email": email, "name": display_name, "redirect": redirect_url, "message": message}
         )
@@ -37,13 +38,13 @@ class FakeGraph:
             request_id="req-invite",
         )
 
-    def add_group_member(self, group_id, user_id):
+    async def add_group_member(self, group_id, user_id):
         self.memberships.append((group_id, user_id))
         if self.member_error:
             raise self.member_error
         return MembershipResult(already_member=self.already_member, request_id="req-member")
 
-    def get_group_name(self, group_id):
+    async def get_group_name(self, group_id):
         return "AI Cohort 2026-Q4"
 
 
@@ -52,7 +53,7 @@ class FakeTurnstile:
         self.result = True
         self.calls: List[tuple] = []
 
-    def verify(self, token, remote_ip=""):
+    async def verify(self, token, remote_ip=""):
         self.calls.append((token, remote_ip))
         return self.result and bool(token)
 
@@ -77,6 +78,11 @@ def make_settings(**overrides) -> Settings:
 
 
 @pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture
 def graph():
     return FakeGraph()
 
@@ -95,8 +101,7 @@ def store():
 def make_client(graph, turnstile, store):
     def _make(**overrides):
         app = create_app(make_settings(**overrides), graph=graph, store=store, turnstile=turnstile)
-        app.testing = True
-        return app.test_client()
+        return TestClient(app)
 
     return _make
 

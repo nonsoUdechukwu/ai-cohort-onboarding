@@ -1,6 +1,11 @@
-Flask>=3.0,<4
-gunicorn>=22,<24
-Flask-Limiter>=3.5,<4
-requests>=2.31,<3
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+gunicorn>=22,<27
+Jinja2>=3.1,<4
+python-multipart>=0.0.9,<1
+pydantic>=2.7,<3
+pydantic-settings>=2.7,<3
+httpx>=0.27,<1
 azure-identity>=1.16,<2
+aiohttp>=3.9,<4
 azure-data-tables>=12.5,<13

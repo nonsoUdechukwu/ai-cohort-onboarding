@@ -103,10 +103,10 @@ Onboarding each student by hand is slow and error-prone. The instructor has to i
 Student browser
    │  HTTPS (form + Turnstile token)
    ▼
-Azure App Service (F1, Linux, Python 3.12, gunicorn)
-   ├─ Flask: GET /            student form (Jinja template)
-   ├─ Flask: POST /api/register
-   └─ Flask: GET /admin       (Easy Auth: Entra sign-in + admin check)
+Azure App Service (F1, Linux, Python 3.12, gunicorn + uvicorn worker)
+   ├─ FastAPI: GET /            student form (Jinja2Templates)
+   ├─ FastAPI: POST /api/register
+   └─ FastAPI: GET /admin       (Easy Auth: Entra sign-in + admin check)
          │ client-credentials token (azure-identity)
          ├──────────────► Microsoft Graph
          │                  1. POST /invitations
@@ -115,13 +115,13 @@ Azure App Service (F1, Linux, Python 3.12, gunicorn)
 ```
 
 ### 8.2 Stack
-- **Runtime:** Python 3.12 + **Flask**, served by **gunicorn**. It is light enough for F1.
-- **Auth to Graph:** `azure-identity` (`ClientSecretCredential` or `ManagedIdentityCredential`) with plain `requests` calls to Graph REST.
-- **Storage:** `azure-data-tables` for the submission log.
-- **Rate limiting:** `Flask-Limiter` (in-memory storage is fine because F1 runs a single instance).
+- **Runtime:** Python 3.12 + **FastAPI**, served by **gunicorn** with one `uvicorn.workers.UvicornWorker` (async; light enough for F1). Pydantic models for the register request/response and `pydantic-settings` for env config.
+- **Auth to Graph:** async `azure-identity` (`azure.identity.aio` `ClientSecretCredential` or `ManagedIdentityCredential`) with `httpx.AsyncClient` calls to Graph REST (Turnstile verification also uses `httpx`).
+- **Storage:** `azure-data-tables` for the submission log (sync client run in a threadpool; in-memory fallback for local dev).
+- **Rate limiting:** a small in-memory per-IP sliding-window limiter (fine because F1 runs a single instance and one worker).
 - **Frontend:** Jinja templates + minimal CSS + vanilla JS. No build step.
-- **Admin auth:** App Service Authentication (Easy Auth) with Entra ID. Flask reads the `X-MS-CLIENT-PRINCIPAL` header and checks the admin list or group.
-- **Tests:** `pytest`, with Graph and Table calls mocked.
+- **Admin auth:** App Service Authentication (Easy Auth) with Entra ID. The app reads the `X-MS-CLIENT-PRINCIPAL` header and checks the admin list or group.
+- **Tests:** `pytest` with FastAPI `TestClient` and `respx`, with Graph, Turnstile and Table calls mocked.
 - **Repo/CI/CD:** a **new GitHub repo** will be created. A GitHub Actions workflow builds and deploys with `azure/webapps-deploy` using OIDC (federated credential, no publish-profile secret).
 - **IaC:** a Bicep template or `az` CLI script for the App Service plan (F1), Web App, Storage account and app settings.
 
@@ -176,7 +176,7 @@ Azure App Service (F1, Linux, Python 3.12, gunicorn)
 |---|---|---|
 | M1 | PRD sign-off | This document |
 | M2 | Tenant + Entra setup | Test tenant, app registration, permissions, cohort and admin groups, RBAC role for the cohort group |
-| M3 | MVP app (Python/Flask) | Form + `/api/register` + Turnstile + rate limit + Table logging, with pytest |
+| M3 | MVP app (Python/FastAPI) | Form + `/api/register` + Turnstile + rate limit + Table logging, with pytest |
 | M4 | Admin page | Easy Auth–protected `/admin` with submission list and CSV export |
 | M5 | Repo + Deploy | New GitHub repo, Bicep/CLI infra, F1 Web App, GitHub Actions (OIDC) |
 | M6 | Pilot | Test with 2–3 users, then open to the cohort |
@@ -196,7 +196,7 @@ Azure App Service (F1, Linux, Python 3.12, gunicorn)
 | 3 | Sign-up gate | **Access code** (plus CAPTCHA and rate limiting) |
 | 4 | Post-accept landing | **Azure portal** (`https://portal.azure.com/<TENANT_ID>`) |
 | 5 | Admin page and log | **Yes, in v1** (Easy Auth + Table Storage) |
-| 6 | Language | **Python** (Flask + gunicorn) |
+| 6 | Language | **Python** (FastAPI + gunicorn/uvicorn; migrated from Flask) |
 | 7 | Repo | **New GitHub repo to be created**; CI/CD through GitHub Actions |
 
 ### Remaining minor questions

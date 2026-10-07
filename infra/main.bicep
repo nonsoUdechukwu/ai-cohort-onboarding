@@ -137,7 +137,7 @@ resource web 'Microsoft.Web/sites@2023-12-01' = {
     clientAffinityEnabled: false
     siteConfig: {
       linuxFxVersion: 'PYTHON|3.12'
-      appCommandLine: 'gunicorn --config gunicorn.conf.py wsgi:app'
+      appCommandLine: 'gunicorn --config gunicorn.conf.py -k uvicorn.workers.UvicornWorker asgi:app'
       alwaysOn: false // not available on F1
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'

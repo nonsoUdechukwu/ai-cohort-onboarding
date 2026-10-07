@@ -10,12 +10,13 @@ access code, and the app
 Instructors get an Easy Auth–protected `/admin` page with the submission log and a CSV export.
 See [docs/PRD.md](docs/PRD.md) for the full requirements.
 
-- **Stack:** Python 3.12, Flask, gunicorn, `azure-identity`, `azure-data-tables`, Flask-Limiter,
-  Jinja + vanilla JS (no build step).
+- **Stack:** Python 3.12, FastAPI (+ Pydantic / pydantic-settings), gunicorn with uvicorn workers,
+  `httpx` (async), `azure-identity` (async credentials), `azure-data-tables`, Jinja + vanilla JS
+  (no build step).
 - **Hosting:** Azure App Service Linux **Free (F1)** + Table Storage.
 
 ```
-Student ──HTTPS──► App Service (F1, gunicorn/Flask)
+Student ──HTTPS──► App Service (F1, gunicorn/uvicorn + FastAPI)
                      ├─ GET  /               form + Cloudflare Turnstile
                      ├─ POST /api/register   captcha → access code → daily cap → Graph
                      ├─ GET  /admin(.csv)    Easy Auth + admin UPN/group check
@@ -27,9 +28,9 @@ Student ──HTTPS──► App Service (F1, gunicorn/Flask)
 
 | Path | Purpose |
 |---|---|
-| `portal/` | Flask app (`config`, `graph`, `turnstile`, `storage`, `auth`, `routes`, templates, static) |
-| `wsgi.py`, `gunicorn.conf.py` | Entry point; single worker + threads (keeps in-memory rate limits consistent) |
-| `tests/` | pytest suite; Graph, Turnstile and Table Storage are mocked |
+| `portal/` | FastAPI app (`config`, `schemas`, `graph`, `turnstile`, `storage`, `auth`, `ratelimit`, `middleware`, `routes`, templates, static) |
+| `asgi.py`, `gunicorn.conf.py` | ASGI entry point; one async uvicorn worker (keeps in-memory rate limits consistent) |
+| `tests/` | pytest suite (FastAPI `TestClient`, `respx`); Graph, Turnstile and Table Storage are mocked |
 | `infra/main.bicep` | F1 Linux plan, Web App (Python 3.12, HTTPS only, managed identity), Storage + table, app settings, optional Easy Auth |
 | `scripts/` | Infra deploy, Graph permission grant (bash + PowerShell), GitHub OIDC setup |
 | `.github/workflows/deploy.yml` | Run tests, then deploy to the Web App with OIDC |
@@ -54,7 +55,7 @@ All configuration comes from environment variables (App Service **Application se
 | `ADMIN_UPNS` | one of | Comma-separated UPNs allowed on `/admin` |
 | `ADMIN_GROUP_ID` | one of | Entra group allowed on `/admin` (needs the groups claim) |
 | `DAILY_INVITE_CAP` | no | Default `100` invites per UTC day; `0` = unlimited |
-| `REGISTER_RATE_LIMIT` | no | Default `5 per 10 minutes` per client IP |
+| `REGISTER_RATE_LIMIT` | no | Default `5 per 10 minutes` per client IP (`N per [M] second/minute/hour/day` or `N/minute`) |
 | `LOCAL_DEV_ADMIN` | no | `true` bypasses `/admin` auth **locally only**; ignored on App Service |
 
 ## Local development
@@ -67,7 +68,7 @@ pip install -r requirements-dev.txt
 
 cp .env.example .env        # edit values; the Turnstile test keys in it always pass
 pytest                      # run the test suite
-flask --app wsgi run --debug   # http://127.0.0.1:5000  (flask loads .env automatically)
+uvicorn asgi:app --reload --env-file .env   # http://127.0.0.1:8000
 ```
 
 - With `LOCAL_DEV_ADMIN=true`, `/admin` works without Easy Auth.
@@ -76,7 +77,8 @@ flask --app wsgi run --debug   # http://127.0.0.1:5000  (flask loads .env automa
   `UseDevelopmentStorage=true`.
 - Real invitations need Graph credentials. Locally use an app registration with `CLIENT_SECRET`
   in a **test tenant** only.
-- Production-like run: `gunicorn --config gunicorn.conf.py wsgi:app` (port 8000).
+- Production-like run: `gunicorn --config gunicorn.conf.py -k uvicorn.workers.UvicornWorker asgi:app`
+  (port 8000).
 
 ## Entra ID / tenant setup
 
@@ -137,7 +139,7 @@ ACCESS_CODE='...' TURNSTILE_SECRET_KEY='...' EASY_AUTH_CLIENT_SECRET='...' \
   ./scripts/deploy-infra.sh rg-ai-cohort westeurope infra/main.parameters.local.json
 ```
 
-This creates the F1 Linux plan, the Web App (Python 3.12, HTTPS only, gunicorn startup command,
+This creates the F1 Linux plan, the Web App (Python 3.12, HTTPS only, gunicorn + uvicorn worker startup command,
 system-assigned managed identity), the Storage account and `submissions` table, and the app
 settings. The output includes `managedIdentityPrincipalId` for step 2 of the Entra setup.
 
@@ -175,6 +177,9 @@ only run the tests. The deploy job is skipped until `AZURE_WEBAPP_NAME` is set.
 - Abuse protection: Turnstile, access code, per-IP rate limit, and `DAILY_INVITE_CAP` (counts
   `invited` + `already_member` submissions per UTC day).
 - Rate limits are kept in memory. This is correct because F1 runs one instance and gunicorn uses
-  one worker. If you scale out, move Flask-Limiter to a shared store (for example Redis).
+  one uvicorn worker (`WEB_CONCURRENCY=1`). If you add workers or scale out, move the limiter
+  (`portal/ratelimit.py`) to a shared store (for example Redis).
+- The client IP is the last `X-Forwarded-For` hop (set by the App Service front end, `:port`
+  stripped), like the previous werkzeug `ProxyFix(x_for=1)` setup.
 - `User.Invite.All` and `GroupMember.ReadWrite.All` are powerful; keep them in the dedicated training
   tenant and prefer the managed identity over a client secret.
