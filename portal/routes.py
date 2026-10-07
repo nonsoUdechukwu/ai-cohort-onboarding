@@ -66,7 +66,7 @@ def clean_name(name: str) -> str:
 async def index(request: Request):
     settings = _ctx(request)["settings"]
     return request.app.state.templates.TemplateResponse(
-        request, "index.html", {"site_key": settings.turnstile_site_key}
+        request, "index.html", {"site_key": settings.turnstile_site_key if settings.turnstile_enabled else ""}
     )
 
 
@@ -135,7 +135,7 @@ async def register(request: Request):
         log.error("Registration rejected, missing configuration: %s", ", ".join(missing))
         return _fail(503, MSG_UNAVAILABLE)
 
-    if not await ctx["turnstile"].verify(data.token, ip):
+    if settings.turnstile_enabled and not await ctx["turnstile"].verify(data.token, ip):
         log.info("Captcha failed for %s from %s", email, ip)
         await _log_attempt(request, email, name, OUTCOME_FAILED, "captcha_failed")
         return _fail(400, MSG_BAD_CAPTCHA)

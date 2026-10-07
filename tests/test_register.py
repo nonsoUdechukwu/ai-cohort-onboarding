@@ -274,3 +274,21 @@ def test_unexpected_graph_error_is_500(client, graph, store):
     assert resp.status_code == 500
     assert "kaboom" not in resp.text
     assert store.list()[0]["ErrorSummary"] == "unexpected: RuntimeError"
+
+
+def test_turnstile_disabled_hides_widget_and_skips_check(make_client, graph, turnstile):
+    client = make_client(turnstile_site_key="", turnstile_secret_key="")
+    body = client.get("/").text
+    assert "cf-turnstile" not in body
+    assert "challenges.cloudflare.com/turnstile" not in body
+    resp = client.post("/api/register", data=valid_form(**{"cf-turnstile-response": ""}))
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    assert turnstile.calls == []
+    assert len(graph.invites) == 1
+
+
+def test_turnstile_half_configured_returns_503(make_client, graph):
+    for overrides in ({"turnstile_site_key": ""}, {"turnstile_secret_key": ""}):
+        resp = make_client(**overrides).post("/api/register", data=valid_form())
+        assert resp.status_code == 503
+    assert graph.invites == []

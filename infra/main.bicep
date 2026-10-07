@@ -41,7 +41,7 @@ param inviteMessage string = 'Welcome to the AI training cohort!'
 @secure()
 param accessCode string = ''
 
-@description('Cloudflare Turnstile site key (public).')
+@description('Cloudflare Turnstile site key (public). Leave site and secret key empty to disable Turnstile.')
 param turnstileSiteKey string = ''
 
 @description('Cloudflare Turnstile secret key.')

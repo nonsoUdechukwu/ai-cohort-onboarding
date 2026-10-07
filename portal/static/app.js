@@ -54,7 +54,7 @@
     if (!codeOk) { code.focus(); return; }
 
     var tokenInput = form.querySelector('[name="cf-turnstile-response"]');
-    if (!tokenInput || !tokenInput.value) {
+    if (form.querySelector(".cf-turnstile") && (!tokenInput || !tokenInput.value)) {
       showStatus("error", [para("Please complete the human verification check first.")]);
       return;
     }

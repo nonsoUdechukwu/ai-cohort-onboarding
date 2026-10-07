@@ -2,7 +2,7 @@
 {% block title %}Join the AI training cohort{% endblock %}
 {% block main_class %}narrow{% endblock %}
 {% block head %}
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  {% if site_key %}<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>{% endif %}
 {% endblock %}
 {% block content %}
 <h1>Join the AI training cohort</h1>
@@ -30,9 +30,11 @@
     <p id="code-error" class="field-error" hidden>Please enter the access code.</p>
   </div>
 
+  {% if site_key %}
   <div class="field">
     <div class="cf-turnstile" data-sitekey="{{ site_key }}" data-action="register" data-theme="light"></div>
   </div>
+  {% endif %}
 
   <button id="submit" type="submit">
     <span class="spinner" aria-hidden="true" hidden></span>

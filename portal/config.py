@@ -127,14 +127,21 @@ class Settings(BaseSettings):
         # model_validate skips the env/dotenv sources, so only ``env`` is used.
         return cls.model_validate(data)
 
+    @property
+    def turnstile_enabled(self) -> bool:
+        return bool(self.turnstile_site_key and self.turnstile_secret_key)
+
     def missing_required(self) -> List[str]:
         """Names of settings needed to process registrations that are not set."""
         required = {
             "TENANT_ID": self.tenant_id,
             "GROUP_ID": self.group_id,
             "ACCESS_CODE": self.access_code,
-            "TURNSTILE_SECRET_KEY": self.turnstile_secret_key,
         }
+        # Turnstile is optional, but only one of its two keys being set is a misconfiguration.
+        if self.turnstile_site_key or self.turnstile_secret_key:
+            required["TURNSTILE_SITE_KEY"] = self.turnstile_site_key
+            required["TURNSTILE_SECRET_KEY"] = self.turnstile_secret_key
         if self.client_secret:
             required["CLIENT_ID"] = self.client_id
         return [name for name, value in required.items() if not value]
