@@ -121,7 +121,9 @@ class TableStore:
         for i, value in enumerate(outcomes):
             params[f"o{i}"] = value
             ors.append(f"Outcome eq @o{i}")
-        query = f"CreatedAt ge @since and ({' or '.join(ors)})"
+        # azure-data-tables splits the filter on spaces to find @params, so keep parentheses
+        # separated from parameter names ("(@o1)" would be parsed as parameter "o1)").
+        query = f"CreatedAt ge @since and ( {' or '.join(ors)} )"
         entities = self._table.query_entities(query, parameters=params, select=["PartitionKey"])
         return sum(1 for _ in entities)
 
