@@ -34,6 +34,7 @@ Student ──HTTPS──► App Service (F1, gunicorn/uvicorn + FastAPI)
 | `infra/main.bicep` | F1 Linux plan, Web App (Python 3.12, HTTPS only, managed identity), Storage + table, app settings, optional Easy Auth |
 | `scripts/` | Infra deploy, Graph permission grant (bash + PowerShell), GitHub OIDC setup |
 | `.github/workflows/deploy.yml` | Run tests, then deploy to the Web App with OIDC |
+| `labs/sonatype-devsecops/` | [Hands-on Docker, SonarQube, and Sonatype lab](labs/sonatype-devsecops/README.md), independent of the portal |
 
 ## Configuration
 
