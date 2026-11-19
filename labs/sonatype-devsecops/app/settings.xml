@@ -1,0 +1,16 @@
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">
+  <mirrors>
+    <mirror>
+      <id>lab-nexus</id>
+      <mirrorOf>*</mirrorOf>
+      <url>http://nexus:8081/repository/maven-public/</url>
+    </mirror>
+  </mirrors>
+  <servers>
+    <server>
+      <id>lab-releases</id>
+      <username>${env.LAB_NEXUS_USER}</username>
+      <password>${env.LAB_NEXUS_PASSWORD}</password>
+    </server>
+  </servers>
+</settings>
